@@ -1,95 +1,147 @@
 <?php
 /**
  * Plugin Name: Gmail CSV Importer
- * Description: Import CSV files from Gmail and create WordPress posts.
+ * Description: Import CSV files from Gmail to WordPress posts.
  * Version: 1.0
- * Author: Your Name
- * Text Domain: gmail-csv-importer
+ * Author: Tao Zhou
  */
 
-if (!defined('ABSPATH')) {
-    exit; // Exit if accessed directly.
+defined('ABSPATH') or die('Direct script access disallowed.');
+
+require_once __DIR__ . '/vendor/autoload.php';
+
+function gmail_csv_importer_menu() {
+    add_menu_page('Gmail CSV Importer', 'Gmail CSV Importer', 'manage_options', 'gmail-csv-importer', 'gmail_csv_importer_options_page');
 }
 
-// 插件激活时设置
-function gmail_csv_importer_activate() {
-    if (!wp_next_scheduled('gmail_csv_importer_cron_hook')) {
-        wp_schedule_event(time(), 'hourly', 'gmail_csv_importer_cron_hook');
-    }
+add_action('admin_menu', 'gmail_csv_importer_menu');
+
+function gmail_csv_importer_options_page() {
+    ?>
+    <div class="wrap">
+        <h1>Gmail CSV Importer</h1>
+        <form method="post" action="options.php">
+            <?php
+            settings_fields('gmail_csv_importer_options_group');
+            do_settings_sections('gmail_csv_importer');
+            submit_button();
+            ?>
+        </form>
+        <form method="post">
+            <?php submit_button('Import CSV from Gmail', 'primary', 'import_csv'); ?>
+        </form>
+    </div>
+    <?php
 }
-register_activation_hook(__FILE__, 'gmail_csv_importer_activate');
 
-// 插件停用时清除设置
-function gmail_csv_importer_deactivate() {
-    wp_clear_scheduled_hook('gmail_csv_importer_cron_hook');
+function gmail_csv_importer_settings() {
+    register_setting('gmail_csv_importer_options_group', 'gmail_csv_importer_client_id');
+    register_setting('gmail_csv_importer_options_group', 'gmail_csv_importer_client_secret');
+    register_setting('gmail_csv_importer_options_group', 'gmail_csv_importer_redirect_uri');
+
+    add_settings_section('gmail_csv_importer_settings_section', 'Google API Settings', null, 'gmail_csv_importer');
+
+    add_settings_field('gmail_csv_importer_client_id', 'Client ID', 'gmail_csv_importer_client_id_render', 'gmail_csv_importer', 'gmail_csv_importer_settings_section');
+    add_settings_field('gmail_csv_importer_client_secret', 'Client Secret', 'gmail_csv_importer_client_secret_render', 'gmail_csv_importer', 'gmail_csv_importer_settings_section');
+    add_settings_field('gmail_csv_importer_redirect_uri', 'Redirect URI', 'gmail_csv_importer_redirect_uri_render', 'gmail_csv_importer', 'gmail_csv_importer_settings_section');
 }
-register_deactivation_hook(__FILE__, 'gmail_csv_importer_deactivate');
 
-// 添加定时任务的钩子
-add_action('gmail_csv_importer_cron_hook', 'gmail_csv_importer_run');
+add_action('admin_init', 'gmail_csv_importer_settings');
 
-// 插件的主功能
-function gmail_csv_importer_run() {
-    $client = get_gmail_client(); // 假设你已经设置好了 Google_Client 并完成了认证流程
-    // 确认客户端已经认证
-    if ($client) {
-        $service = new Google_Service_Gmail($client);
-        $userId = 'me';
-        $query = 'from:sender@example.com subject:"CSV Attachment" has:attachment';
-        $optParams = array(
-            'q' => $query,
-            'maxResults' => 10
-        );
-        $messages = $service->users_messages->listUsersMessages($userId, $optParams);
+function gmail_csv_importer_client_id_render() {
+    ?>
+    <input type="text" name="gmail_csv_importer_client_id" value="<?php echo esc_attr(get_option('gmail_csv_importer_client_id')); ?>" />
+    <?php
+}
 
-        foreach ($messages->getMessages() as $message) {
-            process_message($service, $userId, $message->getId());
+function gmail_csv_importer_client_secret_render() {
+    ?>
+    <input type="text" name="gmail_csv_importer_client_secret" value="<?php echo esc_attr(get_option('gmail_csv_importer_client_secret')); ?>" />
+    <?php
+}
+
+function gmail_csv_importer_redirect_uri_render() {
+    ?>
+    <input type="text" name="gmail_csv_importer_redirect_uri" value="<?php echo esc_attr(get_option('gmail_csv_importer_redirect_uri')); ?>" />
+    <?php
+}
+
+function gmail_csv_importer_authenticate() {
+    if (isset($_POST['import_csv'])) {
+        $client = new Google_Client();
+        $client->setClientId(get_option('gmail_csv_importer_client_id'));
+        $client->setClientSecret(get_option('gmail_csv_importer_client_secret'));
+        $client->setRedirectUri(get_option('gmail_csv_importer_redirect_uri'));
+        $client->addScope(Google_Service_Gmail::GMAIL_READONLY);
+        $client->setAccessType('offline');
+        $client->setPrompt('select_account consent');
+
+        if (isset($_GET['code'])) {
+            $token = $client->fetchAccessTokenWithAuthCode($_GET['code']);
+            update_option('gmail_csv_importer_access_token', $token);
+            wp_redirect(admin_url('admin.php?page=gmail-csv-importer'));
+            exit;
+        }
+
+        $accessToken = get_option('gmail_csv_importer_access_token');
+        if ($accessToken) {
+            $client->setAccessToken($accessToken);
+        }
+
+        if ($client->isAccessTokenExpired()) {
+            $authUrl = $client->createAuthUrl();
+            echo '<a href="' . $authUrl . '">Click here to authorize access to Gmail</a>';
+        } else {
+            gmail_csv_importer_import_csv($client);
         }
     }
 }
 
-// 处理单个邮件
-function process_message($service, $userId, $messageId) {
-    $message = $service->users_messages->get($userId, $messageId, ['format' => 'full']);
-    $parts = $message->getPayload()->getParts();
-    foreach ($parts as $part) {
-        if ($part->getFilename() && substr($part->getFilename(), -3) === 'csv') {
-            $attachmentId = $part->getBody()->getAttachmentId();
-            $attachment = $service->users_messages_attachments->get($userId, $messageId, $attachmentId);
-            $data = base64_decode(strtr($attachment->getData(), '-_', '+/'));
-            create_post_from_csv($data);
+add_action('admin_init', 'gmail_csv_importer_authenticate');
+
+function gmail_csv_importer_import_csv($client) {
+    $service = new Google_Service_Gmail($client);
+    $user = 'me';
+    $query = 'from:paiza@ditu.jp subject:"「Python3入門編」 講座の学習状況レポート" has:attachment filename:zip is:unread';
+    $messages = $service->users_messages->listUsersMessages($user, ['q' => $query]);
+
+    foreach ($messages->getMessages() as $message) {
+        $msg = $service->users_messages->get($user, $message->getId(), ['format' => 'full']);
+        foreach ($msg->getPayload()->getParts() as $part) {
+            if ($part->getFilename() && $part->getMimeType() === 'application/zip') {
+                $data = base64_decode(strtr($part->getBody()->getData(), '-_', '+/'));
+                $zip = new ZipArchive;
+                $res = $zip->open($data);
+                if ($res === TRUE) {
+                    for ($i = 0; $i < $zip->numFiles; $i++) {
+                        $filename = $zip->getNameIndex($i);
+                        if (pathinfo($filename, PATHINFO_EXTENSION) === 'csv') {
+                            $file = $zip->getFromIndex($i);
+                            $csvData = convertShiftJISToUTF8($file);
+                            $data = str_getcsv($csvData, "\n");
+                            foreach ($data as $row) {
+                                $row = str_getcsv($row);
+                                $title = $row[0];
+                                $content = $row[1];
+                                $post_data = array(
+                                    'post_title'   => wp_strip_all_tags($title),
+                                    'post_content' => $content,
+                                    'post_status'  => 'publish',
+                                    'post_author'  => 1,
+                                );
+                                wp_insert_post($post_data);
+                            }
+                        }
+                    }
+                    $zip->close();
+                }
+                $service->users_messages->modify($user, $message->getId(), new Google_Service_Gmail_ModifyMessageRequest(['removeLabelIds' => ['UNREAD']]));
+            }
         }
     }
 }
 
-// 从 CSV 创建文章
-function create_post_from_csv($csvData) {
-    $rows = explode("\n", $csvData);
-    array_shift($rows); // 假设第一行是标题行，需要移除
-
-    foreach ($rows as $row) {
-        $data = str_getcsv($row);
-        // 假设 CSV 格式是: "Title", "Content"
-        $new_post = array(
-            'post_title'    => sanitize_text_field($data[0]),
-            'post_content'  => sanitize_text_field($data[1]),
-            'post_status'   => 'publish',
-            'post_author'   => 1, // 或其他适当的用户ID
-            'post_type'     => 'post',
-        );
-        wp_insert_post($new_post);
-    }
+function convertShiftJISToUTF8($data) {
+    return mb_convert_encoding($data, 'UTF-8', 'SJIS');
 }
-
-// 谷歌认证和客户端设置
-function get_gmail_client() {
-    require_once plugin_dir_path(__FILE__) . '/vendor/autoload.php';
-    $client = new Google_Client();
-    $client->setAuthConfig(plugin_dir_path(__FILE__) . '/credentials.json');
-    $client->addScope(Google_Service_Gmail::GMAIL_READONLY);
-
-    // 根据实际情况调整认证流程，可能需要交互式网页授权等
-    return $client;
-}
-
 ?>
