@@ -1,92 +1,65 @@
 <?php
 /*
 Plugin Name: TinyWebDB
-Description: Imports data from TinyWebDB into WordPress posts.
+Description: Allows importing data from TinyWebDB data files into WordPress posts.
 Version: 1.0
 Author: Tao Zhou
 */
 
-// 创建设置菜单
+// 创建设置菜单和页面
 add_action('admin_menu', 'tinywebdb_importer_setup_menu');
-
 function tinywebdb_importer_setup_menu(){
-    add_menu_page('TinyWebDB Importer', 'TinyWebDB Importer', 'manage_options', 'tinywebdb_importer', 'tinywebdb_importer_init');
+    add_menu_page('TinyWebDB Data Importer', 'TinyWebDB Importer', 'manage_options', 'tinywebdb_importer', 'tinywebdb_importer_init');
 }
 
-// 设置页面的 HTML
+// 插件的初始化页面
 function tinywebdb_importer_init(){
-    ?>
-    <h1>TinyWebDB Importer Settings</h1>
-    <form method="post" action="options.php">
-        <?php
-        settings_fields('tinywebdb_importer_options');
-        do_settings_sections('tinywebdb_importer');
-        submit_button();
-        ?>
-    </form>
-    <?php
+    echo '<h1>TinyWebDB Data Files</h1>';
+    tinywebdb_list_data_files();
 }
 
-// 注册和设置字段
-add_action('admin_init', 'tinywebdb_importer_settings');
-
-function tinywebdb_importer_settings(){
-    register_setting('tinywebdb_importer_options', 'tinywebdb_importer_options', 'tinywebdb_importer_options_validate');
-    add_settings_section('tinywebdb_importer_main', 'Main Settings', 'tinywebdb_importer_section_text', 'tinywebdb_importer');
-    add_settings_field('tinywebdb_url', 'TinyWebDB URL', 'tinywebdb_importer_url', 'tinywebdb_importer', 'tinywebdb_importer_main');
-}
-
-function tinywebdb_importer_section_text(){
-    echo '<p>Enter your TinyWebDB URL here.</p>';
-}
-
-function tinywebdb_importer_url(){
-    $options = get_option('tinywebdb_importer_options');
-    echo "<input id='tinywebdb_url' name='tinywebdb_importer_options[url]' size='40' type='text' value='". esc_attr($options['url']) ."' />";
-}
-
-function tinywebdb_importer_options_validate($input) {
-    $newinput['url'] = trim($input['url']);
-    if(!preg_match('/^http(s)?:\/\/[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,3}(\/\S*)?$/', $newinput['url'])) {
-        add_settings_error('tinywebdb_url', 'invalid-url', 'Invalid URL');
-    }
-    return $newinput;
-}
-
-// 导入数据到文章的按钮和函数
-add_action('admin_notices', 'tinywebdb_importer_notices');
-
-function tinywebdb_importer_notices(){
-    $screen = get_current_screen();
-    if ($screen->id !== "toplevel_page_tinywebdb_importer") {
+// 列出 _data 目录中的所有文件
+function tinywebdb_list_data_files() {
+    $data_path = '/path/to/tinywebdb/_data';  // 这里需要修改为你的 TinyWebDB _data 目录的实际路径
+    if (!file_exists($data_path)) {
+        echo "<p>Error: The data directory does not exist.</p>";
         return;
     }
 
-    echo '<form method="post"><input type="submit" name="import_now" value="Import Now" class="button button-primary"></form>';
+    $files = scandir($data_path);
+    echo '<ul>';
+    foreach ($files as $file) {
+        if ($file != "." && $file != "..") {
+            echo '<li><a href="' . esc_url(add_query_arg('import_file', urlencode($file))) . '">' . esc_html($file) . '</a></li>';
+        }
+    }
+    echo '</ul>';
 
-    if (isset($_POST['import_now'])) {
-        tinywebdb_import_posts();
+    // 处理导入请求
+    if (isset($_GET['import_file'])) {
+        tinywebdb_import_data_file($data_path . '/' . sanitize_text_field($_GET['import_file']));
     }
 }
 
-function tinywebdb_import_posts() {
-    $options = get_option('tinywebdb_importer_options');
-    $response = wp_remote_get($options['url'] . '/getvalue');
-    if (is_wp_error($response)) {
-        echo '<div class="error"><p>Error fetching data: ' . $response->get_error_message() . '</p></div>';
+// 导入指定文件的数据
+function tinywebdb_import_data_file($file_path) {
+    if (!file_exists($file_path)) {
+        echo '<div class="error"><p>Error: The file does not exist.</p></div>';
         return;
     }
 
-    $data = json_decode(wp_remote_retrieve_body($response), true);
+    $data = file_get_contents($file_path);
+    $items = json_decode($data, true);
 
-    if (!is_array($data)) {
-        echo '<div class="error"><p>Failed to import posts. Check the TinyWebDB URL or response format.</p></div>';
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        echo '<div class="error"><p>JSON decoding error: ' . json_last_error_msg() . '</p></div>';
         return;
     }
 
-    foreach ($data as $item) {
+    $imported_count = 0;
+    foreach ($items as $item) {
         if (!isset($item['title']) || !isset($item['content'])) {
-            continue; // Skip items missing title or content
+            continue;
         }
         $post_data = array(
             'post_title'    => wp_strip_all_tags($item['title']),
@@ -95,8 +68,10 @@ function tinywebdb_import_posts() {
             'post_author'   => get_current_user_id(),
             'post_type'     => 'post'
         );
-        wp_insert_post($post_data);
+        if (wp_insert_post($post_data)) {
+            $imported_count++;
+        }
     }
-    echo '<div class="updated"><p>Imported posts successfully.</p></div>';
+    echo '<div class="updated"><p>Imported ' . $imported_count . ' posts successfully from ' . basename($file_path) . '.</p></div>';
 }
-?>
+
