@@ -1,77 +1,81 @@
 <?php
 /*
-Plugin Name: TinyWebDB
-Description: Allows importing data from TinyWebDB data files into WordPress posts.
+Plugin Name: TinyWebDB Integration
+Description: Allows managing TinyWebDB entries from WordPress admin.
 Version: 1.0
-Author: Tao Zhou
+Author: Your Name
 */
 
-// 创建设置菜单和页面
-add_action('admin_menu', 'tinywebdb_importer_setup_menu');
-function tinywebdb_importer_setup_menu(){
-    add_menu_page('TinyWebDB Data Importer', 'TinyWebDB Importer', 'manage_options', 'tinywebdb_importer', 'tinywebdb_importer_init');
+// Add a new menu item in the WordPress admin
+add_action('admin_menu', 'tinywebdb_admin_menu');
+
+function tinywebdb_admin_menu() {
+    add_menu_page('TinyWebDB Integration', 'TinyWebDB', 'manage_options', 'tinywebdb', 'tinywebdb_admin_page');
 }
 
-// 插件的初始化页面
-function tinywebdb_importer_init(){
-    echo '<h1>TinyWebDB Data Files</h1>';
-    tinywebdb_list_data_files();
+// Admin page content
+function tinywebdb_admin_page() {
+    ?>
+    <h1>TinyWebDB Integration</h1>
+    <h2>Store a Value</h2>
+    <form method="post">
+        Tag: <input type="text" name="tag" required>
+        Value: <input type="text" name="value" required>
+        <input type="submit" name="store_value" value="Store Value">
+    </form>
+
+    <h2>Retrieve a Value</h2>
+    <form method="post">
+        Tag: <input type="text" name="retrieve_tag" required>
+        <input type="submit" name="retrieve_value" value="Retrieve Value">
+    </form>
+
+    <?php
+    // Handle post request for storing values
+    if (isset($_POST['store_value'])) {
+        $tag = sanitize_text_field($_POST['tag']);
+        $value = sanitize_text_field($_POST['value']);
+        $store_response = tinywebdb_store_value($tag, $value);
+        echo '<p>' . esc_html($store_response) . '</p>';
+    }
+
+    // Handle post request for retrieving values
+    if (isset($_POST['retrieve_value'])) {
+        $tag = sanitize_text_field($_POST['retrieve_tag']);
+        $retrieve_response = tinywebdb_get_value($tag);
+        echo '<p>Value for ' . esc_html($tag) . ': ' . esc_html($retrieve_response) . '</p>';
+    }
 }
 
-// 列出 _data 目录中的所有文件
-function tinywebdb_list_data_files() {
-    $data_path = '/path/to/tinywebdb/_data';  // 这里需要修改为你的 TinyWebDB _data 目录的实际路径
-    if (!file_exists($data_path)) {
-        echo "<p>Error: The data directory does not exist.</p>";
-        return;
-    }
+// Function to store a value in TinyWebDB
+function tinywebdb_store_value($tag, $value) {
+    $url = 'http://tinywebdb.ditu.site/storeavalue'; // Change this URL to your TinyWebDB store URL
+    $response = wp_remote_post($url, [
+        'body' => [
+            'tag' => $tag,
+            'value' => $value
+        ]
+    ]);
 
-    $files = scandir($data_path);
-    echo '<ul>';
-    foreach ($files as $file) {
-        if ($file != "." && $file != "..") {
-            echo '<li><a href="' . esc_url(add_query_arg('import_file', urlencode($file))) . '">' . esc_html($file) . '</a></li>';
-        }
-    }
-    echo '</ul>';
-
-    // 处理导入请求
-    if (isset($_GET['import_file'])) {
-        tinywebdb_import_data_file($data_path . '/' . sanitize_text_field($_GET['import_file']));
+    if (is_wp_error($response)) {
+        return 'Failed to store value: ' . $response->get_error_message();
+    } else {
+        return 'Value stored successfully!';
     }
 }
 
-// 导入指定文件的数据
-function tinywebdb_import_data_file($file_path) {
-    if (!file_exists($file_path)) {
-        echo '<div class="error"><p>Error: The file does not exist.</p></div>';
-        return;
-    }
+// Function to retrieve a value from TinyWebDB
+function tinywebdb_get_value($tag) {
+    $url = 'http://tinywebdb.ditu.site/getvalue'; // Change this URL to your TinyWebDB retrieve URL
+    $response = wp_remote_post($url, [
+        'body' => ['tag' => $tag]
+    ]);
 
-    $data = file_get_contents($file_path);
-    $items = json_decode($data, true);
-
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        echo '<div class="error"><p>JSON decoding error: ' . json_last_error_msg() . '</p></div>';
-        return;
+    if (is_wp_error($response)) {
+        return 'Failed to retrieve value: ' . $response->get_error_message();
+    } else {
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+        return $data['value'] ?? 'No value found for this tag';
     }
-
-    $imported_count = 0;
-    foreach ($items as $item) {
-        if (!isset($item['title']) || !isset($item['content'])) {
-            continue;
-        }
-        $post_data = array(
-            'post_title'    => wp_strip_all_tags($item['title']),
-            'post_content'  => $item['content'],
-            'post_status'   => 'publish',
-            'post_author'   => get_current_user_id(),
-            'post_type'     => 'post'
-        );
-        if (wp_insert_post($post_data)) {
-            $imported_count++;
-        }
-    }
-    echo '<div class="updated"><p>Imported ' . $imported_count . ' posts successfully from ' . basename($file_path) . '.</p></div>';
 }
-
