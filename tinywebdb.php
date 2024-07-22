@@ -1,146 +1,151 @@
 <?php
-/**
- * Plugin Name: Gmail CSV Importer
- * Description: Import CSV files from Gmail to WordPress posts.
- * Version: 1.0
- * Author: Tao Zhou
- */
+/*
+Plugin Name: WordPress TinyWebDB
+Description: A TinyWebDB implementation for WordPress
+Version: 1.0
+Author: Tao zhou
+*/
 
-defined('ABSPATH') or die('Direct script access disallowed.');
+// 激活插件时创建数据表
+function wp_tinywebdb_activate() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'tinywebdb';
+    $charset_collate = $wpdb->get_charset_collate();
 
-require_once __DIR__ . '/vendor/autoload.php';
+    $sql = "CREATE TABLE $table_name (
+        id mediumint(9) NOT NULL AUTO_INCREMENT,
+        tag varchar(255) NOT NULL,
+        value longtext NOT NULL,
+        updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY  (id),
+        UNIQUE KEY tag (tag)
+    ) $charset_collate;";
 
-function gmail_csv_importer_menu() {
-    add_menu_page('Gmail CSV Importer', 'Gmail CSV Importer', 'manage_options', 'gmail-csv-importer', 'gmail_csv_importer_options_page');
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($sql);
 }
+register_activation_hook(__FILE__, 'wp_tinywebdb_activate');
 
-add_action('admin_menu', 'gmail_csv_importer_menu');
+// 处理 API 请求
+function wp_tinywebdb_api_handler() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'tinywebdb';
 
-function gmail_csv_importer_options_page() {
-    ?>
-    <div class="wrap">
-        <h1>Gmail CSV Importer</h1>
-        <form method="post" action="options.php">
-            <?php
-            settings_fields('gmail_csv_importer_options_group');
-            do_settings_sections('gmail_csv_importer');
-            submit_button();
-            ?>
-        </form>
-        <form method="post">
-            <?php submit_button('Import CSV from Gmail', 'primary', 'import_csv'); ?>
-        </form>
-    </div>
-    <?php
-}
+    if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action'])) {
+        $action = $_GET['action'];
+        $tag = isset($_GET['tag']) ? sanitize_text_field($_GET['tag']) : '';
 
-function gmail_csv_importer_settings() {
-    register_setting('gmail_csv_importer_options_group', 'gmail_csv_importer_client_id');
-    register_setting('gmail_csv_importer_options_group', 'gmail_csv_importer_client_secret');
-    register_setting('gmail_csv_importer_options_group', 'gmail_csv_importer_redirect_uri');
-
-    add_settings_section('gmail_csv_importer_settings_section', 'Google API Settings', null, 'gmail_csv_importer');
-
-    add_settings_field('gmail_csv_importer_client_id', 'Client ID', 'gmail_csv_importer_client_id_render', 'gmail_csv_importer', 'gmail_csv_importer_settings_section');
-    add_settings_field('gmail_csv_importer_client_secret', 'Client Secret', 'gmail_csv_importer_client_secret_render', 'gmail_csv_importer', 'gmail_csv_importer_settings_section');
-    add_settings_field('gmail_csv_importer_redirect_uri', 'Redirect URI', 'gmail_csv_importer_redirect_uri_render', 'gmail_csv_importer', 'gmail_csv_importer_settings_section');
-}
-
-add_action('admin_init', 'gmail_csv_importer_settings');
-
-function gmail_csv_importer_client_id_render() {
-    ?>
-    <input type="text" name="gmail_csv_importer_client_id" value="<?php echo esc_attr(get_option('gmail_csv_importer_client_id')); ?>" />
-    <?php
-}
-
-function gmail_csv_importer_client_secret_render() {
-    ?>
-    <input type="text" name="gmail_csv_importer_client_secret" value="<?php echo esc_attr(get_option('gmail_csv_importer_client_secret')); ?>" />
-    <?php
-}
-
-function gmail_csv_importer_redirect_uri_render() {
-    ?>
-    <input type="text" name="gmail_csv_importer_redirect_uri" value="<?php echo esc_attr(get_option('gmail_csv_importer_redirect_uri')); ?>" />
-    <?php
-}
-
-function gmail_csv_importer_authenticate() {
-    if (isset($_POST['import_csv'])) {
-        $client = new Google_Client();
-        $client->setClientId(get_option('gmail_csv_importer_client_id'));
-        $client->setClientSecret(get_option('gmail_csv_importer_client_secret'));
-        $client->setRedirectUri(get_option('gmail_csv_importer_redirect_uri'));
-        $client->addScope(Google_Service_Gmail::GMAIL_READONLY);
-        $client->setAccessType('offline');
-        $client->setPrompt('select_account consent');
-
-        if (isset($_GET['code'])) {
-            $token = $client->fetchAccessTokenWithAuthCode($_GET['code']);
-            update_option('gmail_csv_importer_access_token', $token);
-            wp_redirect(admin_url('admin.php?page=gmail-csv-importer'));
-            exit;
+        if ($action === 'getvalue' && !empty($tag)) {
+            $value = $wpdb->get_var($wpdb->prepare("SELECT value FROM $table_name WHERE tag = %s", $tag));
+            wp_send_json(array("VALUE", $tag, $value));
         }
+    } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+        $action = $_POST['action'];
+        $tag = isset($_POST['tag']) ? sanitize_text_field($_POST['tag']) : '';
+        $value = isset($_POST['value']) ? sanitize_text_field($_POST['value']) : '';
 
-        $accessToken = get_option('gmail_csv_importer_access_token');
-        if ($accessToken) {
-            $client->setAccessToken($accessToken);
-        }
-
-        if ($client->isAccessTokenExpired()) {
-            $authUrl = $client->createAuthUrl();
-            echo '<a href="' . $authUrl . '">Click here to authorize access to Gmail</a>';
-        } else {
-            gmail_csv_importer_import_csv($client);
-        }
-    }
-}
-
-add_action('admin_init', 'gmail_csv_importer_authenticate');
-
-function gmail_csv_importer_import_csv($client) {
-    $service = new Google_Service_Gmail($client);
-    $user = 'me';
-    $query = 'from:paiza@ditu.jp subject:"「Python3入門編」 講座の学習状況レポート" has:attachment filename:zip is:unread';
-    $messages = $service->users_messages->listUsersMessages($user, ['q' => $query]);
-
-    foreach ($messages->getMessages() as $message) {
-        $msg = $service->users_messages->get($user, $message->getId(), ['format' => 'full']);
-        foreach ($msg->getPayload()->getParts() as $part) {
-            if ($part->getFilename() && $part->getMimeType() === 'application/zip') {
-                $data = base64_decode(strtr($part->getBody()->getData(), '-_', '+/'));
-                $zip = new ZipArchive;
-                $res = $zip->open($data);
-                if ($res === TRUE) {
-                    for ($i = 0; $i < $zip->numFiles; $i++) {
-                        $filename = $zip->getNameIndex($i);
-                        if (pathinfo($filename, PATHINFO_EXTENSION) === 'csv') {
-                            $file = $zip->getFromIndex($i);
-                            $csvData = convertShiftJISToUTF8($file);
-                            $data = str_getcsv($csvData, "\n");
-                            foreach ($data as $row) {
-                                $row = str_getcsv($row);
-                                $title = $row[0];
-                                $content = $row[1];
-                                $post_data = array(
-                                    'post_title'   => wp_strip_all_tags($title),
-                                    'post_content' => $content,
-                                    'post_status'  => 'publish',
-                                    'post_author'  => 1,
-                                );
-                                wp_insert_post($post_data);
-                            }
-                        }
-                    }
-                    $zip->close();
-                }
-                $service->users_messages->modify($user, $message->getId(), new Google_Service_Gmail_ModifyMessageRequest(['removeLabelIds' => ['UNREAD']]));
+        if ($action === 'storeavalue' && !empty($tag)) {
+            if (empty($value)) {
+                $wpdb->delete($table_name, ['tag' => $tag]);
+                wp_send_json(array("REMOVED", $tag));
+            } else {
+                $wpdb->replace($table_name, ['tag' => $tag, 'value' => $value]);
+                wp_send_json(array("STORED", $tag, $value));
             }
         }
     }
 }
+add_action('init', 'wp_tinywebdb_api_handler');
 
+// 添加管理页面
+function wp_tinywebdb_menu() {
+    add_menu_page('TinyWebDB', 'TinyWebDB', 'manage_options', 'wp-tinywebdb', 'wp_tinywebdb_admin_page');
+}
+add_action('admin_menu', 'wp_tinywebdb_menu');
+
+// 管理页面内容
+function wp_tinywebdb_admin_page() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'tinywebdb';
+
+    echo '<div class="wrap">';
+    echo '<h1>TinyWebDB Data</h1>';
+
+    // 显示数据表
+    $results = $wpdb->get_results("SELECT * FROM $table_name ORDER BY updated_at DESC");
+    echo '<table class="wp-list-table widefat fixed striped">';
+    echo '<thead><tr><th>Tag</th><th>Value</th><th>Updated At</th></tr></thead>';
+    echo '<tbody>';
+    foreach ($results as $row) {
+        echo '<tr>';
+        echo '<td>' . esc_html($row->tag) . '</td>';
+        echo '<td>' . esc_html($row->value) . '</td>';
+        echo '<td>' . esc_html($row->updated_at) . '</td>';
+        echo '</tr>';
+    }
+    echo '</tbody></table>';
+
+    echo '</div>';
+}
+
+// 添加短代码以在前端显示表单
+function wp_tinywebdb_shortcode() {
+    ob_start();
+    ?>
+    <h2>App Inventor (TinyWebDB) Web Database Service</h2>
+    <h3>Search database for a tag</h3>
+    <form action="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" method="get">
+        <input type="hidden" name="action" value="wp_tinywebdb_getvalue">
+        <p>Tag: <input type="text" name="tag" /></p>
+        <input type="submit" value="Get value">
+    </form>
+
+    <h3>Store a tag-value pair in the database</h3>
+    <form action="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" method="post">
+        <input type="hidden" name="action" value="wp_tinywebdb_storeavalue">
+        <p>Tag: <input type="text" name="tag" /></p>
+        <p>Value: <input type="text" name="value" /></p>
+        <input type="submit" value="Store a value">
+    </form>
+    <?php
+    return ob_get_clean();
+}
+add_shortcode('tinywebdb_form', 'wp_tinywebdb_shortcode');
+
+// AJAX 处理函数
+function wp_tinywebdb_ajax_getvalue() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'tinywebdb';
+    $tag = isset($_GET['tag']) ? sanitize_text_field($_GET['tag']) : '';
+    
+    if (!empty($tag)) {
+        $value = $wpdb->get_var($wpdb->prepare("SELECT value FROM $table_name WHERE tag = %s", $tag));
+        wp_send_json(array("VALUE", $tag, $value));
+    }
+    wp_die();
+}
+add_action('wp_ajax_wp_tinywebdb_getvalue', 'wp_tinywebdb_ajax_getvalue');
+add_action('wp_ajax_nopriv_wp_tinywebdb_getvalue', 'wp_tinywebdb_ajax_getvalue');
+
+function wp_tinywebdb_ajax_storeavalue() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'tinywebdb';
+    $tag = isset($_POST['tag']) ? sanitize_text_field($_POST['tag']) : '';
+    $value = isset($_POST['value']) ? sanitize_text_field($_POST['value']) : '';
+
+    if (!empty($tag)) {
+        if (empty($value)) {
+            $wpdb->delete($table_name, ['tag' => $tag]);
+            wp_send_json(array("REMOVED", $tag));
+        } else {
+            $wpdb->replace($table_name, ['tag' => $tag, 'value' => $value]);
+            wp_send_json(array("STORED", $tag, $value));
+        }
+    }
+    wp_die();
+}
+add_action('wp_ajax_wp_tinywebdb_storeavalue', 'wp_tinywebdb_ajax_storeavalue');
+add_action('wp_ajax_nopriv_wp_tinywebdb_storeavalue', 'wp_tinywebdb_ajax_storeavalue');
 function convertShiftJISToUTF8($data) {
     return mb_convert_encoding($data, 'UTF-8', 'SJIS');
 }
