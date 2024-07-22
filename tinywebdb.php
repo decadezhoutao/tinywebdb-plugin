@@ -2,8 +2,8 @@
 /*
 Plugin Name: WordPress TinyWebDB
 Description: A TinyWebDB implementation for WordPress
-Version: 1.0
-Author: Tao zhou
+Version: 1.0.0
+Author: Tao Zhou
 */
 
 // 激活插件时创建数据表
@@ -44,11 +44,11 @@ function wp_tinywebdb_api_handler() {
         $value = isset($_POST['value']) ? sanitize_text_field($_POST['value']) : '';
         if (!empty($tag)) {
             if (empty($value)) {
-                $wpdb->delete($table_name, ['tag' => $tag]);
-                echo "REMOVED";
+                $result = $wpdb->delete($table_name, ['tag' => $tag]);
+                echo $result !== false ? "REMOVED" : "ERROR: " . $wpdb->last_error;
             } else {
-                $wpdb->replace($table_name, ['tag' => $tag, 'value' => $value]);
-                echo "STORED";
+                $result = $wpdb->replace($table_name, ['tag' => $tag, 'value' => $value]);
+                echo $result !== false ? "STORED" : "ERROR: " . $wpdb->last_error;
             }
             exit;
         }
@@ -72,17 +72,21 @@ function wp_tinywebdb_admin_page() {
 
     // 显示数据表
     $results = $wpdb->get_results("SELECT * FROM $table_name ORDER BY updated_at DESC");
-    echo '<table class="wp-list-table widefat fixed striped">';
-    echo '<thead><tr><th>Tag</th><th>Value</th><th>Updated At</th></tr></thead>';
-    echo '<tbody>';
-    foreach ($results as $row) {
-        echo '<tr>';
-        echo '<td>' . esc_html($row->tag) . '</td>';
-        echo '<td>' . esc_html($row->value) . '</td>';
-        echo '<td>' . esc_html($row->updated_at) . '</td>';
-        echo '</tr>';
+    if ($results === null) {
+        echo '<p>Error: ' . $wpdb->last_error . '</p>';
+    } else {
+        echo '<table class="wp-list-table widefat fixed striped">';
+        echo '<thead><tr><th>Tag</th><th>Value</th><th>Updated At</th></tr></thead>';
+        echo '<tbody>';
+        foreach ($results as $row) {
+            echo '<tr>';
+            echo '<td>' . esc_html($row->tag) . '</td>';
+            echo '<td>' . esc_html($row->value) . '</td>';
+            echo '<td>' . esc_html($row->updated_at) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
     }
-    echo '</tbody></table>';
 
     echo '</div>';
 }
@@ -110,3 +114,17 @@ function wp_tinywebdb_shortcode() {
     return ob_get_clean();
 }
 add_shortcode('tinywebdb_form', 'wp_tinywebdb_shortcode');
+
+// 添加调试信息
+function wp_tinywebdb_debug_info() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'tinywebdb';
+    
+    echo '<div style="background-color: #f0f0f0; padding: 10px; margin-top: 20px;">';
+    echo '<h3>TinyWebDB Debug Info:</h3>';
+    echo '<p>Table name: ' . $table_name . '</p>';
+    echo '<p>Table exists: ' . ($wpdb->get_var("SHOW TABLES LIKE '$table_name'") == $table_name ? 'Yes' : 'No') . '</p>';
+    echo '<p>Plugin file: ' . __FILE__ . '</p>';
+    echo '</div>';
+}
+add_action('wp_footer', 'wp_tinywebdb_debug_info');
