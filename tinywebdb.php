@@ -2,11 +2,11 @@
 /*
 Plugin Name: WordPress TinyWebDB
 Description: A TinyWebDB implementation for WordPress
-Version: 1.3
-Author: Tao Zhou
+Version: 1.4
+Author: Your Name
 */
 
-// 激活插件时创建数据表和页面
+// 激活插件时创建数据表
 function wp_tinywebdb_activate() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'tinywebdb';
@@ -23,22 +23,6 @@ function wp_tinywebdb_activate() {
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
-
-    // 创建TinyWebDB页面
-    $page_title = 'TinyWebDB Interface';
-    $page_content = '[tinywebdb_form]';
-    $page_check = get_page_by_title($page_title);
-
-    if(!$page_check) {
-        $page = array(
-            'post_type' => 'page',
-            'post_title' => $page_title,
-            'post_content' => $page_content,
-            'post_status' => 'publish',
-            'post_author' => 1,
-        );
-        wp_insert_post($page);
-    }
 }
 register_activation_hook(__FILE__, 'wp_tinywebdb_activate');
 
@@ -47,31 +31,29 @@ function wp_tinywebdb_api_handler() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'tinywebdb';
 
-    if (isset($_REQUEST['action']) && $_REQUEST['action'] === 'wp_tinywebdb_getvalue') {
+    if (isset($_REQUEST['tinywebdb_action']) && $_REQUEST['tinywebdb_action'] === 'getvalue') {
         $tag = isset($_REQUEST['tag']) ? sanitize_text_field($_REQUEST['tag']) : '';
         if (!empty($tag)) {
             $value = $wpdb->get_var($wpdb->prepare("SELECT value FROM $table_name WHERE tag = %s", $tag));
-            wp_send_json(array("VALUE", $tag, $value));
+            echo json_encode(array("VALUE", $tag, $value));
         }
-    } elseif (isset($_REQUEST['action']) && $_REQUEST['action'] === 'wp_tinywebdb_storeavalue') {
+        exit;
+    } elseif (isset($_REQUEST['tinywebdb_action']) && $_REQUEST['tinywebdb_action'] === 'storeavalue') {
         $tag = isset($_REQUEST['tag']) ? sanitize_text_field($_REQUEST['tag']) : '';
         $value = isset($_REQUEST['value']) ? sanitize_text_field($_REQUEST['value']) : '';
         if (!empty($tag)) {
             if (empty($value)) {
                 $result = $wpdb->delete($table_name, ['tag' => $tag]);
-                wp_send_json($result !== false ? "REMOVED" : "ERROR: " . $wpdb->last_error);
+                echo $result !== false ? "REMOVED" : "ERROR: " . $wpdb->last_error;
             } else {
                 $result = $wpdb->replace($table_name, ['tag' => $tag, 'value' => $value]);
-                wp_send_json($result !== false ? "STORED" : "ERROR: " . $wpdb->last_error);
+                echo $result !== false ? "STORED" : "ERROR: " . $wpdb->last_error;
             }
         }
+        exit;
     }
-    wp_die();
 }
-add_action('wp_ajax_wp_tinywebdb_getvalue', 'wp_tinywebdb_api_handler');
-add_action('wp_ajax_nopriv_wp_tinywebdb_getvalue', 'wp_tinywebdb_api_handler');
-add_action('wp_ajax_wp_tinywebdb_storeavalue', 'wp_tinywebdb_api_handler');
-add_action('wp_ajax_nopriv_wp_tinywebdb_storeavalue', 'wp_tinywebdb_api_handler');
+add_action('init', 'wp_tinywebdb_api_handler');
 
 // 添加管理页面
 function wp_tinywebdb_menu() {
@@ -108,39 +90,40 @@ function wp_tinywebdb_admin_page() {
     echo '</div>';
 }
 
-// 添加短代码以在前端显示表单
-function wp_tinywebdb_shortcode() {
-    ob_start();
+// 在所有页面底部添加 TinyWebDB 表单
+function wp_tinywebdb_add_form() {
     ?>
-    <h2>App Inventor (TinyWebDB) Web Database Service</h2>
-    <h3>Search database for a tag</h3>
-    <form id="tinywebdb-get-form">
-        <p>Tag: <input type="text" name="tag" /></p>
-        <input type="submit" value="Get value">
-    </form>
-    <div id="get-result"></div>
+    <div id="tinywebdb-container" style="margin: 20px; padding: 20px; border: 1px solid #ddd;">
+        <h2>App Inventor (TinyWebDB) Web Database Service</h2>
+        <h3>Search database for a tag</h3>
+        <form id="tinywebdb-get-form">
+            <p>Tag: <input type="text" name="tag" /></p>
+            <input type="submit" value="Get value">
+        </form>
+        <div id="get-result"></div>
 
-    <h3>Store a tag-value pair in the database</h3>
-    <form id="tinywebdb-store-form">
-        <p>Tag: <input type="text" name="tag" /></p>
-        <p>Value: <input type="text" name="value" /></p>
-        <input type="submit" value="Store a value">
-    </form>
-    <div id="store-result"></div>
+        <h3>Store a tag-value pair in the database</h3>
+        <form id="tinywebdb-store-form">
+            <p>Tag: <input type="text" name="tag" /></p>
+            <p>Value: <input type="text" name="value" /></p>
+            <input type="submit" value="Store a value">
+        </form>
+        <div id="store-result"></div>
+    </div>
 
     <script>
     jQuery(document).ready(function($) {
         $('#tinywebdb-get-form').submit(function(e) {
             e.preventDefault();
             $.ajax({
-                url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                url: '<?php echo esc_url(home_url('/')); ?>',
                 type: 'GET',
                 data: {
-                    action: 'wp_tinywebdb_getvalue',
+                    tinywebdb_action: 'getvalue',
                     tag: $('input[name="tag"]', this).val()
                 },
                 success: function(response) {
-                    $('#get-result').text(JSON.stringify(response));
+                    $('#get-result').text(response);
                 }
             });
         });
@@ -148,10 +131,10 @@ function wp_tinywebdb_shortcode() {
         $('#tinywebdb-store-form').submit(function(e) {
             e.preventDefault();
             $.ajax({
-                url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                url: '<?php echo esc_url(home_url('/')); ?>',
                 type: 'POST',
                 data: {
-                    action: 'wp_tinywebdb_storeavalue',
+                    tinywebdb_action: 'storeavalue',
                     tag: $('input[name="tag"]', this).val(),
                     value: $('input[name="value"]', this).val()
                 },
@@ -163,9 +146,8 @@ function wp_tinywebdb_shortcode() {
     });
     </script>
     <?php
-    return ob_get_clean();
 }
-add_shortcode('tinywebdb_form', 'wp_tinywebdb_shortcode');
+add_action('wp_footer', 'wp_tinywebdb_add_form');
 
 // 确保 jQuery 被加载
 function wp_tinywebdb_enqueue_scripts() {
