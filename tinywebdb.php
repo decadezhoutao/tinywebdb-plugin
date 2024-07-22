@@ -2,11 +2,11 @@
 /*
 Plugin Name: WordPress TinyWebDB
 Description: A TinyWebDB implementation for WordPress
-Version: 1.0.0
+Version: 1.3
 Author: Tao Zhou
 */
 
-// 激活插件时创建数据表
+// 激活插件时创建数据表和页面
 function wp_tinywebdb_activate() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'tinywebdb';
@@ -23,6 +23,22 @@ function wp_tinywebdb_activate() {
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
+
+    // 创建TinyWebDB页面
+    $page_title = 'TinyWebDB Interface';
+    $page_content = '[tinywebdb_form]';
+    $page_check = get_page_by_title($page_title);
+
+    if(!$page_check) {
+        $page = array(
+            'post_type' => 'page',
+            'post_title' => $page_title,
+            'post_content' => $page_content,
+            'post_status' => 'publish',
+            'post_author' => 1,
+        );
+        wp_insert_post($page);
+    }
 }
 register_activation_hook(__FILE__, 'wp_tinywebdb_activate');
 
