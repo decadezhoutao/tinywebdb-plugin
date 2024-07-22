@@ -31,27 +31,30 @@ function wp_tinywebdb_api_handler() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'tinywebdb';
 
-    if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action'])) {
-        $action = $_GET['action'];
+    if (isset($_GET['tinywebdb_action'])) {
+        $action = $_GET['tinywebdb_action'];
         $tag = isset($_GET['tag']) ? sanitize_text_field($_GET['tag']) : '';
 
         if ($action === 'getvalue' && !empty($tag)) {
             $value = $wpdb->get_var($wpdb->prepare("SELECT value FROM $table_name WHERE tag = %s", $tag));
-            wp_send_json(array("VALUE", $tag, $value));
+            header('Content-Type: application/json');
+            echo json_encode(array("VALUE", $tag, $value));
+            exit;
         }
-    } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-        $action = $_POST['action'];
+    } elseif (isset($_POST['tinywebdb_action'])) {
+        $action = $_POST['tinywebdb_action'];
         $tag = isset($_POST['tag']) ? sanitize_text_field($_POST['tag']) : '';
         $value = isset($_POST['value']) ? sanitize_text_field($_POST['value']) : '';
 
         if ($action === 'storeavalue' && !empty($tag)) {
             if (empty($value)) {
                 $wpdb->delete($table_name, ['tag' => $tag]);
-                wp_send_json(array("REMOVED", $tag));
+                echo "REMOVED";
             } else {
                 $wpdb->replace($table_name, ['tag' => $tag, 'value' => $value]);
-                wp_send_json(array("STORED", $tag, $value));
+                echo "STORED";
             }
+            exit;
         }
     }
 }
@@ -94,15 +97,15 @@ function wp_tinywebdb_shortcode() {
     ?>
     <h2>App Inventor (TinyWebDB) Web Database Service</h2>
     <h3>Search database for a tag</h3>
-    <form action="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" method="get">
-        <input type="hidden" name="action" value="wp_tinywebdb_getvalue">
+    <form action="" method="get">
+        <input type="hidden" name="tinywebdb_action" value="getvalue">
         <p>Tag: <input type="text" name="tag" /></p>
         <input type="submit" value="Get value">
     </form>
 
     <h3>Store a tag-value pair in the database</h3>
-    <form action="<?php echo esc_url(admin_url('admin-ajax.php')); ?>" method="post">
-        <input type="hidden" name="action" value="wp_tinywebdb_storeavalue">
+    <form action="" method="post">
+        <input type="hidden" name="tinywebdb_action" value="storeavalue">
         <p>Tag: <input type="text" name="tag" /></p>
         <p>Value: <input type="text" name="value" /></p>
         <input type="submit" value="Store a value">
@@ -111,42 +114,3 @@ function wp_tinywebdb_shortcode() {
     return ob_get_clean();
 }
 add_shortcode('tinywebdb_form', 'wp_tinywebdb_shortcode');
-
-// AJAX 处理函数
-function wp_tinywebdb_ajax_getvalue() {
-    global $wpdb;
-    $table_name = $wpdb->prefix . 'tinywebdb';
-    $tag = isset($_GET['tag']) ? sanitize_text_field($_GET['tag']) : '';
-    
-    if (!empty($tag)) {
-        $value = $wpdb->get_var($wpdb->prepare("SELECT value FROM $table_name WHERE tag = %s", $tag));
-        wp_send_json(array("VALUE", $tag, $value));
-    }
-    wp_die();
-}
-add_action('wp_ajax_wp_tinywebdb_getvalue', 'wp_tinywebdb_ajax_getvalue');
-add_action('wp_ajax_nopriv_wp_tinywebdb_getvalue', 'wp_tinywebdb_ajax_getvalue');
-
-function wp_tinywebdb_ajax_storeavalue() {
-    global $wpdb;
-    $table_name = $wpdb->prefix . 'tinywebdb';
-    $tag = isset($_POST['tag']) ? sanitize_text_field($_POST['tag']) : '';
-    $value = isset($_POST['value']) ? sanitize_text_field($_POST['value']) : '';
-
-    if (!empty($tag)) {
-        if (empty($value)) {
-            $wpdb->delete($table_name, ['tag' => $tag]);
-            wp_send_json(array("REMOVED", $tag));
-        } else {
-            $wpdb->replace($table_name, ['tag' => $tag, 'value' => $value]);
-            wp_send_json(array("STORED", $tag, $value));
-        }
-    }
-    wp_die();
-}
-add_action('wp_ajax_wp_tinywebdb_storeavalue', 'wp_tinywebdb_ajax_storeavalue');
-add_action('wp_ajax_nopriv_wp_tinywebdb_storeavalue', 'wp_tinywebdb_ajax_storeavalue');
-function convertShiftJISToUTF8($data) {
-    return mb_convert_encoding($data, 'UTF-8', 'SJIS');
-}
-?>
