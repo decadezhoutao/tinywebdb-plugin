@@ -31,22 +31,18 @@ function wp_tinywebdb_api_handler() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'tinywebdb';
 
-    if (isset($_GET['tinywebdb_action'])) {
-        $action = $_GET['tinywebdb_action'];
+    if (isset($_GET['action']) && $_GET['action'] === 'getvalue') {
         $tag = isset($_GET['tag']) ? sanitize_text_field($_GET['tag']) : '';
-
-        if ($action === 'getvalue' && !empty($tag)) {
+        if (!empty($tag)) {
             $value = $wpdb->get_var($wpdb->prepare("SELECT value FROM $table_name WHERE tag = %s", $tag));
             header('Content-Type: application/json');
             echo json_encode(array("VALUE", $tag, $value));
             exit;
         }
-    } elseif (isset($_POST['tinywebdb_action'])) {
-        $action = $_POST['tinywebdb_action'];
+    } elseif (isset($_POST['action']) && $_POST['action'] === 'storeavalue') {
         $tag = isset($_POST['tag']) ? sanitize_text_field($_POST['tag']) : '';
         $value = isset($_POST['value']) ? sanitize_text_field($_POST['value']) : '';
-
-        if ($action === 'storeavalue' && !empty($tag)) {
+        if (!empty($tag)) {
             if (empty($value)) {
                 $wpdb->delete($table_name, ['tag' => $tag]);
                 echo "REMOVED";
@@ -97,15 +93,15 @@ function wp_tinywebdb_shortcode() {
     ?>
     <h2>App Inventor (TinyWebDB) Web Database Service</h2>
     <h3>Search database for a tag</h3>
-    <form action="" method="get">
-        <input type="hidden" name="tinywebdb_action" value="getvalue">
+    <form action="<?php echo esc_url(home_url('/')); ?>" method="get">
+        <input type="hidden" name="action" value="getvalue">
         <p>Tag: <input type="text" name="tag" /></p>
         <input type="submit" value="Get value">
     </form>
 
     <h3>Store a tag-value pair in the database</h3>
-    <form action="" method="post">
-        <input type="hidden" name="tinywebdb_action" value="storeavalue">
+    <form action="<?php echo esc_url(home_url('/')); ?>" method="post">
+        <input type="hidden" name="action" value="storeavalue">
         <p>Tag: <input type="text" name="tag" /></p>
         <p>Value: <input type="text" name="value" /></p>
         <input type="submit" value="Store a value">
