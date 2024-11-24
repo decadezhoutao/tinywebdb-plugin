@@ -1,7 +1,7 @@
 <?php
 /*
-Plugin Name: Category Posts Exporter
-Description: Export posts from selected categories to CSV file
+Plugin Name: Category Posts Table Exporter
+Description: Export posts from selected categories to CSV file with table preview
 Version: 1.0
 Author: Your Name
 */
@@ -24,54 +24,193 @@ function cpe_add_admin_menu() {
     );
 }
 
+// 添加必要的CSS和JavaScript
+add_action('admin_enqueue_scripts', 'cpe_enqueue_scripts');
+function cpe_enqueue_scripts($hook) {
+    if ('toplevel_page_category-posts-exporter' !== $hook) {
+        return;
+    }
+    
+    wp_enqueue_style('cpe-style', plugins_url('css/style.css', __FILE__));
+    wp_enqueue_script('cpe-script', plugins_url('js/script.js', __FILE__), array('jquery'), '1.0', true);
+    wp_localize_script('cpe-script', 'cpe_ajax', array(
+        'ajax_url' => admin_url('admin-ajax.php'),
+        'nonce' => wp_create_nonce('cpe_ajax_nonce')
+    ));
+}
+
+// 创建必要的目录和文件
+function cpe_create_plugin_files() {
+    // 创建css目录和文件
+    $css_dir = plugin_dir_path(__FILE__) . 'css';
+    if (!file_exists($css_dir)) {
+        mkdir($css_dir, 0755, true);
+    }
+    
+    $css_file = $css_dir . '/style.css';
+    if (!file_exists($css_file)) {
+        file_put_contents($css_file, '
+            .cpe-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 20px;
+            }
+            .cpe-table th, .cpe-table td {
+                border: 1px solid #ddd;
+                padding: 8px;
+                text-align: left;
+            }
+            .cpe-table th {
+                background-color: #f5f5f5;
+            }
+            .cpe-download-btn {
+                margin-top: 20px !important;
+                margin-bottom: 20px !important;
+            }
+        ');
+    }
+    
+    // 创建js目录和文件
+    $js_dir = plugin_dir_path(__FILE__) . 'js';
+    if (!file_exists($js_dir)) {
+        mkdir($js_dir, 0755, true);
+    }
+    
+    $js_file = $js_dir . '/script.js';
+    if (!file_exists($js_file)) {
+        file_put_contents($js_file, '
+            jQuery(document).ready(function($) {
+                $("#category-select").change(function() {
+                    var category_id = $(this).val();
+                    if(category_id) {
+                        $.ajax({
+                            url: cpe_ajax.ajax_url,
+                            type: "POST",
+                            data: {
+                                action: "get_category_posts",
+                                category_id: category_id,
+                                nonce: cpe_ajax.nonce
+                            },
+                            success: function(response) {
+                                $("#posts-table").html(response);
+                                $("#download-btn").show();
+                            }
+                        });
+                    } else {
+                        $("#posts-table").html("");
+                        $("#download-btn").hide();
+                    }
+                });
+            });
+        ');
+    }
+}
+
+// 在插件激活时创建文件
+register_activation_hook(__FILE__, 'cpe_create_plugin_files');
+
 // 创建管理页面
 function cpe_admin_page() {
     ?>
     <div class="wrap">
         <h1>导出分类文章到CSV</h1>
-        <form method="post" action="">
+        
+        <select id="category-select" name="category_id">
+            <option value="">请选择分类</option>
             <?php
-            wp_nonce_field('cpe_export_action', 'cpe_nonce');
             $categories = get_categories(array('hide_empty' => false));
+            foreach ($categories as $category) {
+                echo sprintf(
+                    '<option value="%s">%s</option>',
+                    esc_attr($category->term_id),
+                    esc_html($category->name)
+                );
+            }
             ?>
-            <table class="form-table">
-                <tr>
-                    <th scope="row">选择分类</th>
-                    <td>
-                        <select name="category_id" required>
-                            <option value="">请选择分类</option>
-                            <?php foreach ($categories as $category): ?>
-                                <option value="<?php echo esc_attr($category->term_id); ?>">
-                                    <?php echo esc_html($category->name); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </td>
-                </tr>
-            </table>
-            <p class="submit">
-                <input type="submit" name="export_posts" class="button button-primary" value="导出CSV">
-            </p>
+        </select>
+
+        <div id="posts-table"></div>
+        
+        <form method="post" action="<?php echo admin_url('admin-ajax.php'); ?>" id="download-form" style="display:none;">
+            <input type="hidden" name="action" value="download_csv">
+            <input type="hidden" name="category_id" id="download-category-id">
+            <?php wp_nonce_field('cpe_download_nonce', 'cpe_nonce'); ?>
+            <button type="submit" class="button button-primary cpe-download-btn" id="download-btn">
+                下载CSV文件
+            </button>
         </form>
     </div>
     <?php
-    
-    // 处理导出请求
-    if (isset($_POST['export_posts']) && check_admin_referer('cpe_export_action', 'cpe_nonce')) {
-        $category_id = intval($_POST['category_id']);
-        if ($category_id > 0) {
-            cpe_export_posts_to_csv($category_id);
-        }
-    }
 }
 
-// 导出文章到CSV的函数
-function cpe_export_posts_to_csv($category_id) {
-    // 获取分类信息
-    $category = get_term($category_id, 'category');
-    if (is_wp_error($category)) {
-        wp_die('分类不存在');
+// AJAX处理函数：获取分类文章
+add_action('wp_ajax_get_category_posts', 'cpe_get_category_posts');
+function cpe_get_category_posts() {
+    check_ajax_referer('cpe_ajax_nonce', 'nonce');
+    
+    $category_id = intval($_POST['category_id']);
+    if ($category_id <= 0) {
+        wp_send_json_error('Invalid category ID');
     }
+    
+    $posts = get_posts(array(
+        'category' => $category_id,
+        'numberposts' => -1,
+        'post_status' => 'publish'
+    ));
+    
+    ob_start();
+    ?>
+    <table class="cpe-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>标题</th>
+                <th>发布日期</th>
+                <th>作者</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($posts as $post): ?>
+                <tr>
+                    <td><?php echo esc_html($post->ID); ?></td>
+                    <td><?php echo esc_html($post->post_title); ?></td>
+                    <td><?php echo get_the_date('Y-m-d', $post); ?></td>
+                    <td><?php echo esc_html(get_the_author_meta('display_name', $post->post_author)); ?></td>
+                </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+    <script>
+        jQuery(document).ready(function($) {
+            $("#download-form").show();
+            $("#download-category-id").val(<?php echo $category_id; ?>);
+        });
+    </script>
+    <?php
+    
+    echo ob_get_clean();
+    wp_die();
+}
+
+// AJAX处理函数：下载CSV
+add_action('wp_ajax_download_csv', 'cpe_download_csv');
+function cpe_download_csv() {
+    if (!check_admin_referer('cpe_download_nonce', 'cpe_nonce')) {
+        wp_die('Invalid nonce');
+    }
+    
+    $category_id = intval($_POST['category_id']);
+    if ($category_id <= 0) {
+        wp_die('Invalid category ID');
+    }
+    
+    $category = get_term($category_id, 'category');
+    $posts = get_posts(array(
+        'category' => $category_id,
+        'numberposts' => -1,
+        'post_status' => 'publish'
+    ));
     
     // 设置CSV文件头
     header('Content-Type: text/csv; charset=utf-8');
@@ -95,57 +234,28 @@ function cpe_export_posts_to_csv($category_id) {
         '标签'
     ));
     
-    // 获取分类下的文章
-    $posts = get_posts(array(
-        'category' => $category_id,
-        'numberposts' => -1,
-        'post_status' => 'publish'
-    ));
-    
-    // 遍历文章并写入CSV
+    // 写入数据
     foreach ($posts as $post) {
-        // 获取文章标签
-        $tags = wp_get_post_tags($post->ID);
+        $tags = get_the_tags($post->ID);
         $tag_names = array();
-        foreach ($tags as $tag) {
-            $tag_names[] = $tag->name;
+        if ($tags) {
+            foreach ($tags as $tag) {
+                $tag_names[] = $tag->name;
+            }
         }
         
-        // 获取作者信息
-        $author = get_user_by('id', $post->post_author);
-        
-        // 写入CSV行
         fputcsv($output, array(
             $post->ID,
             $post->post_title,
             wp_strip_all_tags($post->post_content),
-            $post->post_date,
-            $author->display_name,
+            get_the_date('Y-m-d', $post),
+            get_the_author_meta('display_name', $post->post_author),
             get_permalink($post->ID),
-            $post->post_excerpt,
+            wp_strip_all_tags($post->post_excerpt),
             implode(', ', $tag_names)
         ));
     }
     
     fclose($output);
     exit;
-}
-
-// 添加插件激活时的操作
-register_activation_hook(__FILE__, 'cpe_activate');
-function cpe_activate() {
-    // 检查WordPress版本
-    if (version_compare(get_bloginfo('version'), '4.0', '<')) {
-        wp_die('此插件需要WordPress 4.0或更高版本');
-    }
-    
-    // 添加其他初始化操作（如果需要）
-    flush_rewrite_rules();
-}
-
-// 添加插件停用时的操作
-register_deactivation_hook(__FILE__, 'cpe_deactivate');
-function cpe_deactivate() {
-    // 清理插件数据（如果需要）
-    flush_rewrite_rules();
 }
